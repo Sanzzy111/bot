@@ -13,14 +13,18 @@ class Buttons(commands.Cog):
     def is_admin(self, member):
         return member.guild_permissions.administrator or member == member.guild.owner or member.bot
 
-    async def create_button(self, label: str, url: str):
+    async def create_button(self, label: str, url: str, interaction: discord.Interaction):
         """Helper function to create button with emoji or image"""
         # Check if label contains emoji
         emoji_pattern = r'<(?P<animated>a?):(?P<name>[a-zA-Z0-9_]+):(?P<id>[0-9]+)>'
         emoji_match = re.search(emoji_pattern, label)
         
         # Check if label is image URL
-        is_image_url = re.match(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+\.(?:png|jpg|jpeg|gif)', label.strip())
+        is_image_url = re.match(
+            r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+\.(?:png|jpg|jpeg|gif|webp)',
+            label.strip(),
+            re.IGNORECASE
+        )
 
         if emoji_match:
             # Handle server emoji
@@ -42,16 +46,30 @@ class Buttons(commands.Cog):
             try:
                 async with self.session.get(label) as resp:
                     if resp.status == 200:
-                        image_data = await resp.read()
-                        emoji = await self._create_temp_emoji(label, image_data)
-                        return discord.ui.Button(
-                            style=discord.ButtonStyle.link,
-                            label=" ",  # Empty label for image-only button
-                            emoji=emoji,
-                            url=url
-                        )
-            except Exception:
-                pass
+                        # Try to create a custom emoji first
+                        try:
+                            image_data = await resp.read()
+                            emoji = await interaction.guild.create_custom_emoji(
+                                name=f"btn_{interaction.user.id}",
+                                image=image_data,
+                                reason=f"Button icon for {interaction.user}"
+                            )
+                            return discord.ui.Button(
+                                style=discord.ButtonStyle.link,
+                                label=" ",  # Empty label for image-only button
+                                emoji=emoji,
+                                url=url
+                            )
+                        except discord.Forbidden:
+                            # Fallback to using the image URL directly (Discord.py 2.0+)
+                            return discord.ui.Button(
+                                style=discord.ButtonStyle.link,
+                                label=label.split('/')[-1][:20],  # Use filename as label
+                                url=url,
+                                emoji=None
+                            )
+            except Exception as e:
+                print(f"Error handling image URL: {e}")
         
         # Default text button
         return discord.ui.Button(
@@ -59,15 +77,6 @@ class Buttons(commands.Cog):
             label=label,
             url=url
         )
-
-    async def _create_temp_emoji(self, image_url: str, image_data: bytes):
-        """Try to create temporary emoji from image (fallback to default if failed)"""
-        try:
-            # For demo purposes, we'll use PartialEmoji with the URL as name
-            # In production, you'd want to actually upload the emoji if bot has permissions
-            return discord.PartialEmoji(name=image_url.split('/')[-1], url=image_url)
-        except:
-            return "🔗"  # Fallback emoji
 
     @app_commands.command(name="multibutton", description="Admin-only: Buat pesan dengan beberapa tombol link")
     @app_commands.describe(
@@ -107,7 +116,7 @@ class Buttons(commands.Cog):
 
         for btn in filter(None, buttons):
             label, url = btn
-            button = await self.create_button(label, url)
+            button = await self.create_button(label, url, interaction)
             view.add_item(button)
 
         await interaction.channel.send(content=message, view=view)
@@ -170,7 +179,7 @@ class Buttons(commands.Cog):
 
             for btn in filter(None, buttons):
                 label, url = btn
-                button = await self.create_button(label, url)
+                button = await self.create_button(label, url, interaction)
                 view.add_item(button)
 
             await message.edit(view=view)

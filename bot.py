@@ -11,12 +11,16 @@ class MyBot(commands.Bot):
         intents.members = True
         intents.message_content = True
         
+        # Tentukan owner bot (ganti dengan ID Discord Anda)
+        owner_ids = [1194983217086857292]  # Contoh: [your_discord_id]
+        
         super().__init__(
             command_prefix="!",
             intents=intents,
-            application_id=os.getenv('APPLICATION_ID')
+            application_id=os.getenv('APPLICATION_ID'),
+            owner_ids=owner_ids  # Tambahkan ini
         )
-    
+
     async def setup_hook(self):
         # Load cogs
         for filename in os.listdir('./cogs'):
@@ -25,6 +29,14 @@ class MyBot(commands.Bot):
         
         # Sync slash commands
         await self.tree.sync()
+
+        # Tambahkan command sync manual
+        @self.command()
+        @commands.is_owner()  # Hanya owner yang bisa jalankan
+        async def sync(ctx):
+            """Sync slash commands (Owner only)"""
+            await self.tree.sync()
+            await ctx.send("✅ Slash commands synced!", ephemeral=True)
 
 bot = MyBot()
 

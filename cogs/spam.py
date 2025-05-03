@@ -116,7 +116,7 @@ class Spam(commands.Cog):
             description="Jangan spam dong, nanti aku pusing 😵",
             color=discord.Color.red()
         )
-        embed.set_thumbnail(url="https://i.imgur.com/8Km9tLL.png")
+        embed.set_thumbnail(url="https://i.imgur.com/9wDAsyz.jpeg")
         embed.add_field(
             name="Warning:",
             value=mute_warning,
@@ -160,7 +160,7 @@ class Spam(commands.Cog):
             description="Bahasa yang baik itu keren lho 😎",
             color=discord.Color.orange()
         )
-        embed.set_thumbnail(url="https://i.imgur.com/XYZ1234.png")
+        embed.set_thumbnail(url="https://i.imgur.com/9wDAsyz.jpeg")
         embed.add_field(
             name="Pesan kamu:",
             value=f"||{message.content[:200]}||",

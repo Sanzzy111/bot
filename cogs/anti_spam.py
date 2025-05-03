@@ -1,86 +1,174 @@
 import discord
 from discord.ext import commands
-from discord import app_commands, Embed
-import re, datetime, asyncio
-from collections import defaultdict
+from datetime import datetime, timedelta
+import asyncio
+import json
+import os
 
-spam_tracker = defaultdict(lambda: {"messages": [], "warnings": 0})
-emoji_spam_limit = 4
-emoji_mute_duration = 2       
-mention_mute_duration = 4     
-spam_timeout = 10             
-mention_limit = 5
-
-def extract_emojis(text):
-    return re.findall(r'<a?:\w+:\d+>|[\U00010000-\U0010ffff]', text)
-
-def count_mentions(message):
-    return len(message.mentions)
-
-async def apply_mute(member, duration, reason="Spam"):
-    mute_role = discord.utils.get(member.guild.roles, name="Muted")
-    if not mute_role:
-        mute_role = await member.guild.create_role(name="Muted")
-        for channel in member.guild.channels:
-            await channel.set_permissions(mute_role, send_messages=False)
-    await member.add_roles(mute_role, reason=reason)
-    await asyncio.sleep(duration)
-    await member.remove_roles(mute_role)
-
-class Security(commands.Cog):
+class Moderation(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-
+        
+        # Anti-spam settings
+        self.spam_control = commands.CooldownMapping.from_cooldown(
+            5, 15.0, commands.BucketType.user
+        )
+        
+        # Bad word filter
+        self.bad_words = [
+            "anjing", "bangsat", "kontol", "memek", 
+            "jancok", "asu", "bajingan", "ngentot",
+            "ajg", "yatim", "yapit"
+        ]
+        
+        # Violation tracking
+        self.violations = {}  # Format: {user_id: {"spam": count, "bad_words": count}}
+        
+        # Load violations from file if exists
+        if os.path.exists('violations.json'):
+            with open('violations.json', 'r') as f:
+                self.violations = json.load(f)
+    
+    def save_violations(self):
+        with open('violations.json', 'w') as f:
+            json.dump(self.violations, f)
+    
+    async def mute_member(self, member, duration=30):
+        muted_role = discord.utils.get(member.guild.roles, name="Muted")
+        
+        # Create muted role if it doesn't exist
+        if not muted_role:
+            muted_role = await member.guild.create_role(name="Muted")
+            
+            # Apply permission overwrites to all channels
+            for channel in member.guild.channels:
+                await channel.set_permissions(muted_role,
+                    send_messages=False,
+                    add_reactions=False,
+                    speak=False)
+        
+        await member.add_roles(muted_role)
+        
+        # Unmute after duration
+        await asyncio.sleep(duration)
+        await member.remove_roles(muted_role)
+    
     @commands.Cog.listener()
     async def on_message(self, message):
-        if message.author.bot or message.author.guild_permissions.administrator:
+        if message.author.bot:
             return
-
-        now = datetime.datetime.utcnow()
-        data = spam_tracker[message.author.id]
-        data["messages"] = [t for t in data["messages"] if (now - t).seconds < 5]
-        data["messages"].append(now)
-
-        if len(data["messages"]) > 3:
-            await message.delete()
-            data["warnings"] += 1
-
-            if data["warnings"] == 1:
-                embed = Embed(title="Peringatan Spam", description=f"{message.author.mention}, jangan spam!", color=discord.Color.orange())
-                await message.channel.send(embed=embed, delete_after=5)
-            else:
-                embed = Embed(
-                    title="Mute Diterapkan",
-                    description=f"{message.author.mention} telah dimute karena spam selama {spam_timeout // 60} menit!",
-                    color=discord.Color.red()
-                )
-                await message.channel.send(embed=embed, delete_after=5)
-                await apply_mute(message.author, spam_timeout)
-            return
-
-        emoji_count = len(extract_emojis(message.content))
-        if emoji_count > emoji_spam_limit:
-            await message.delete()
-            embed = Embed(
-                title="Terlalu Banyak Emoji",
-                description=f"{message.author.mention}, terlalu banyak emoji dalam satu pesan! Dimute selama {emoji_mute_duration} detik.",
-                color=discord.Color.red()
-            )
-            await message.channel.send(embed=embed, delete_after=5)
-            await apply_mute(message.author, emoji_mute_duration)
-            return
-
-        mention_count = count_mentions(message)
-        if mention_count > mention_limit:
-            await message.delete()
-            embed = Embed(
-                title="Terlalu Banyak Mention",
-                description=f"{message.author.mention}, kamu menyebut terlalu banyak anggota! Dimute selama {mention_mute_duration // 60} menit.",
-                color=discord.Color.red()
-            )
-            await message.channel.send(embed=embed, delete_after=5)
-            await apply_mute(message.author, mention_mute_duration)
-            return
+            
+        # Initialize user in violations tracker if not exists
+        if str(message.author.id) not in self.violations:
+            self.violations[str(message.author.id)] = {
+                "spam": 0,
+                "bad_words": 0
+            }
+        
+        user_violations = self.violations[str(message.author.id)]
+        action_taken = False
+        
+        # Anti-spam check
+        bucket = self.spam_control.get_bucket(message)
+        retry_after = bucket.update_rate_limit()
+        
+        if retry_after:
+            user_violations["spam"] += 1
+            action_taken = True
+            await self.handle_spam(message, user_violations["spam"])
+            
+        # Bad word check
+        content_lower = message.content.lower()
+        detected_words = [word for word in self.bad_words if word in content_lower]
+        
+        if detected_words:
+            user_violations["bad_words"] += 1
+            action_taken = True
+            await self.handle_bad_words(message, detected_words, user_violations["bad_words"])
+        
+        if action_taken:
+            self.save_violations()
+    
+    async def handle_spam(self, message, violation_count):
+        await message.delete()
+        
+        remaining_chances = 3 - violation_count
+        mute_warning = ""
+        
+        if violation_count >= 3:
+            # Mute the user for 30 seconds
+            mute_warning = "Karena ini pelanggaran ke-3, kamu aku mute 30 detik! 😠"
+            await self.mute_member(message.author)
+            self.violations[str(message.author.id)]["spam"] = 0  # Reset counter
+        else:
+            mute_warning = f"Kesempatan tersisa: {remaining_chances}x. Kalau spam lagi, aku mute 30 detik ya! 😤"
+        
+        embed = discord.Embed(
+            title="Waduh, Santai Bro! 🚨",
+            description="Jangan spam dong, nanti aku pusing 😵",
+            color=discord.Color.red()
+        )
+        embed.set_thumbnail(url="https://i.imgur.com/9wDAsyz.jpeg")
+        embed.add_field(
+            name="Warning:",
+            value=mute_warning,
+            inline=False
+        )
+        embed.add_field(
+            name="Tips:",
+            value="Coba jeda dikit ya, biar obrolan lebih enak dibaca 😊",
+            inline=False
+        )
+        embed.set_footer(text="Aturan server: No spam!")
+        
+        await message.channel.send(
+            f"{message.author.mention}",
+            embed=embed,
+            delete_after=15.0
+        )
+    
+    async def handle_bad_words(self, message, detected_words, violation_count):
+        await message.delete()
+        
+        remaining_chances = 3 - violation_count
+        mute_warning = ""
+        
+        if violation_count >= 3:
+            # Mute the user for 30 seconds
+            mute_warning = "Ini udah 3x ngomong kasar, kamu aku mute 30 detik! 🤬"
+            await self.mute_member(message.author)
+            self.violations[str(message.author.id)]["bad_words"] = 0  # Reset counter
+        else:
+            mute_warning = f"Kesempatan tersisa: {remaining_chances}x. Kalau kasar lagi, aku mute ya! 😠"
+        
+        embed = discord.Embed(
+            title="Woi, Jangan Kasar! ⚠️",
+            description="Bahasa yang baik itu keren lho 😎",
+            color=discord.Color.orange()
+        )
+        embed.set_thumbnail(url="https://i.imgur.com/9wDAsyz.jpeg")
+        embed.add_field(
+            name="Pesan kamu:",
+            value=f"||{message.content[:200]}||",
+            inline=False
+        )
+        embed.add_field(
+            name="Kata yang terdeteksi:",
+            value=", ".join(detected_words),
+            inline=False
+        )
+        embed.add_field(
+            name="Warning:",
+            value=mute_warning,
+            inline=False
+        )
+        embed.set_footer(text="Mari jaga kerukunan!")
+        
+        await message.channel.send(
+            f"{message.author.mention}",
+            embed=embed,
+            delete_after=15.0
+        )
 
 async def setup(bot):
-    await bot.add_cog(Security(bot))
+    await bot.add_cog(Moderation(bot))

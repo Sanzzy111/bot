@@ -174,7 +174,6 @@ class TicTacToe(commands.Cog):
         description="Mulai permainan Tic Tac Toe dengan teman"
     )
     @app_commands.describe(opponent="Pilih lawan mainmu")
-    @app_commands.default_permissions(use_application_commands=True)
     async def tic_tac_toe(self, interaction: discord.Interaction, opponent: discord.Member):
         """Memulai permainan Tic Tac Toe dengan konfirmasi"""
         if opponent.bot:

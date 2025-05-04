@@ -65,7 +65,7 @@ class TicTacToeView(View):
         super().__init__(timeout=300)
         self.player1 = player1
         self.player2 = player2
-        self.current_player = random.choice([player1, player2])
+        self.current_player = random.choice([player1, player2])  # Pemain pertama random
         self.board = [[0, 0, 0], [0, 0, 0], [0, 0, 0]]
         
         for y in range(3):
@@ -104,10 +104,35 @@ class TicTacToeView(View):
         
         return None
 
+class ConfirmView(View):
+    def __init__(self, inviter, opponent):
+        super().__init__(timeout=60)
+        self.inviter = inviter
+        self.opponent = opponent
+        self.confirmed = False
+    
+    @discord.ui.button(emoji="✅", style=discord.ButtonStyle.green)
+    async def accept(self, interaction: discord.Interaction, button: Button):
+        if interaction.user != self.opponent:
+            await interaction.response.send_message("Hanya yang diundang yang bisa menerima!", ephemeral=True)
+            return
+            
+        self.confirmed = True
+        self.stop()
+        await interaction.response.defer()
+    
+    @discord.ui.button(emoji="❌", style=discord.ButtonStyle.red)
+    async def reject(self, interaction: discord.Interaction, button: Button):
+        if interaction.user != self.opponent:
+            await interaction.response.send_message("Hanya yang diundang yang bisa menolak!", ephemeral=True)
+            return
+            
+        self.stop()
+        await interaction.response.defer()
+
 class TicTacToe(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.pending_invites = {}
     
     @app_commands.command(
         name="tictactoe",
@@ -115,7 +140,7 @@ class TicTacToe(commands.Cog):
     )
     @app_commands.describe(lawan="Pilih lawan mainmu")
     async def tic_tac_toe(self, interaction: discord.Interaction, lawan: discord.Member):
-        """Memulai permainan Tic Tac Toe dengan konfirmasi"""
+        """Memulai permainan Tic Tac Toe dengan konfirmasi reaction"""
         
         if lawan.bot:
             return await interaction.response.send_message("Bots tidak bisa main Tic Tac Toe!", ephemeral=True)
@@ -123,82 +148,53 @@ class TicTacToe(commands.Cog):
         if lawan == interaction.user:
             return await interaction.response.send_message("Tidak bisa main sendiri!", ephemeral=True)
         
-        # Kirim pesan undangan
+        # Kirim pesan undangan dengan button
         embed = discord.Embed(
             title="🎮 Undangan Tic Tac Toe",
             description=(
                 f"{lawan.mention}, kamu diundang main Tic Tac Toe oleh {interaction.user.mention}!\n\n"
-                "Balas pesan ini dengan:\n"
-                "✅ `YA` untuk menerima\n"
-                "❌ `TIDAK` untuk menolak\n\n"
+                "Klik tombol dibawah untuk:\n"
+                "✅ Terima undangan\n"
+                "❌ Tolak undangan\n\n"
                 "Undangan akan kadaluarsa dalam 1 menit."
             ),
             color=discord.Color.blue()
         )
         
-        await interaction.response.send_message(embed=embed)
-        msg = await interaction.original_response()
+        view = ConfirmView(interaction.user, lawan)
+        await interaction.response.send_message(embed=embed, view=view)
+        await view.wait()
         
-        # Simpan data undangan
-        self.pending_invites[msg.id] = {
-            "inviter": interaction.user,
-            "opponent": lawan,
-            "message": msg
-        }
-        
-        # Set timeout 1 menit
-        await asyncio.sleep(60)
-        if msg.id in self.pending_invites:
-            del self.pending_invites[msg.id]
-            await msg.delete()
-    
-    @commands.Cog.listener()
-    async def on_message(self, message):
-        # Cek apakah pesan adalah balasan untuk undangan
-        if not message.reference:
-            return
-            
-        if message.reference.message_id not in self.pending_invites:
-            return
-            
-        invite = self.pending_invites[message.reference.message_id]
-        
-        # Cek apakah pengirim adalah lawan yang diundang
-        if message.author != invite["opponent"]:
-            return
-        
-        # Proses jawaban
-        content = message.content.lower()
-        if content in ("ya", "yes", "y", "ok", "gas"):
-            # Mulai game
-            view = TicTacToeView(invite["inviter"], invite["opponent"])
-            
+        if view.is_finished():
+            if view.confirmed:
+                # Mulai game
+                game_view = TicTacToeView(interaction.user, lawan)
+                
+                embed = discord.Embed(
+                    title="🎮 Tic Tac Toe",
+                    description=(
+                        f"**Pemain 1:** ❌ {interaction.user.mention}\n"
+                        f"**Pemain 2:** ⭕ {lawan.mention}\n\n"
+                        f"🔹 Giliran: {game_view.current_player.mention}\n\n"
+                        f"{game_view.get_board_str()}"
+                    ),
+                    color=discord.Color.green()
+                )
+                
+                message = await interaction.original_response()
+                await message.edit(embed=embed, view=game_view)
+            else:
+                embed = discord.Embed(
+                    description=f"❌ {lawan.mention} menolak undangan main.",
+                    color=discord.Color.red()
+                )
+                await interaction.edit_original_response(embed=embed, view=None)
+        else:
             embed = discord.Embed(
-                title="🎮 Tic Tac Toe",
-                description=(
-                    f"**Pemain 1:** ❌ {invite['inviter'].mention}\n"
-                    f"**Pemain 2:** ⭕ {invite['opponent'].mention}\n\n"
-                    f"🔹 Giliran: {view.current_player.mention}\n\n"
-                    f"{view.get_board_str()}"
-                ),
-                color=discord.Color.green()
+                description="⏰ Waktu konfirmasi habis, undangan dibatalkan.",
+                color=discord.Color.light_grey()
             )
-            
-            await invite["message"].edit(embed=embed, view=view)
-            del self.pending_invites[message.reference.message_id]
-            
-        elif content in ("tidak", "no", "n", "tolak"):
-            embed = discord.Embed(
-                description=f"❌ {invite['opponent'].mention} menolak undangan main.",
-                color=discord.Color.red()
-            )
-            await invite["message"].edit(embed=embed)
-            del self.pending_invites[message.reference.message_id]
-        
-        try:
-            await message.delete()
-        except:
-            pass
+            await interaction.edit_original_response(embed=embed, view=None)
 
 async def setup(bot):
     await bot.add_cog(TicTacToe(bot))

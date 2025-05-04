@@ -11,41 +11,50 @@ class MyBot(commands.Bot):
         intents.members = True
         intents.message_content = True
         
-        # Tentukan owner bot (ganti dengan ID Discord Anda)
-        owner_ids = [1194983217086857292]  # Contoh: [your_discord_id]
+        owner_ids = [1194983217086857292]  # Ganti dengan ID Discord Anda
         
         super().__init__(
             command_prefix="!",
             intents=intents,
             application_id=os.getenv('APPLICATION_ID'),
-            owner_ids=owner_ids  # Tambahkan ini
+            owner_ids=owner_ids
         )
 
     async def setup_hook(self):
         # Load cogs
         for filename in os.listdir('./cogs'):
             if filename.endswith('.py') and not filename.startswith('_'):
-                await self.load_extension(f'cogs.{filename[:-3]}')
+                try:
+                    await self.load_extension(f'cogs.{filename[:-3]}')
+                    print(f'✅ Cog loaded: cogs.{filename[:-3]}')
+                except Exception as e:
+                    print(f'❌ Failed to load cog {filename}: {e}')
         
-        # Sync slash commands
+        # Sync slash commands globally
         await self.tree.sync()
+        print('✅ Slash commands synced!')
 
-        # Tambahkan command sync manual
-        @self.command()
-        @commands.is_owner()  # Hanya owner yang bisa jalankan
-        async def sync(ctx):
-            """Sync slash commands (Owner only)"""
-            await self.tree.sync()
-            await ctx.send("✅ Slash commands synced!", ephemeral=True)
+    async def on_ready(self):
+        print(f'Logged in as {self.user} (ID: {self.user.id})')
+        print('------')
 
+# Tambahkan command sync manual di luar class
 bot = MyBot()
 
-@bot.event
-async def on_ready():
-    print(f'Logged in as {bot.user} (ID: {bot.user.id})')
-    print('------')
+@bot.command()
+@commands.is_owner()
+async def sync(ctx):
+    """Sync slash commands (Owner only)"""
+    await ctx.bot.tree.sync()
+    await ctx.send("✅ Slash commands synced globally!", ephemeral=True)
 
 if __name__ == '__main__':
     from utils.keep_alive import keep_alive
     keep_alive()
-    bot.run(os.getenv('DISCORD_TOKEN'))
+    
+    try:
+        bot.run(os.getenv('DISCORD_TOKEN'))
+    except discord.LoginFailure:
+        print("⚠️ Token invalid! Please check your .env file")
+    except Exception as e:
+        print(f"⚠️ Bot crashed: {e}")

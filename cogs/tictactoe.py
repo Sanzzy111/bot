@@ -134,11 +134,17 @@ class TicTacToe(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
     
+    async def setup_hook(self):
+        # Register perintah global
+        await self.bot.tree.sync()
+        print("Tic Tac Toe command synced globally!")
+    
     @app_commands.command(
         name="tictactoe",
         description="Undang temanmu main Tic Tac Toe"
     )
     @app_commands.describe(lawan="Pilih lawan mainmu")
+    @app_commands.default_permissions(use_application_commands=True)  # Izinkan semua member
     async def tic_tac_toe(self, interaction: discord.Interaction, lawan: discord.Member):
         """Memulai permainan Tic Tac Toe dengan konfirmasi reaction"""
         
@@ -197,4 +203,7 @@ class TicTacToe(commands.Cog):
             await interaction.edit_original_response(embed=embed, view=None)
 
 async def setup(bot):
-    await bot.add_cog(TicTacToe(bot))
+    cog = TicTacToe(bot)
+    await bot.add_cog(cog)
+    # Sync commands saat cog dimuat
+    await bot.tree.sync()

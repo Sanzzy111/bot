@@ -65,7 +65,7 @@ class TicTacToeView(View):
         super().__init__(timeout=300)
         self.player1 = player1
         self.player2 = player2
-        self.current_player = random.choice([player1, player2])  # Pemain pertama random
+        self.current_player = random.choice([player1, player2])
         self.board = [[0, 0, 0], [0, 0, 0], [0, 0, 0]]
         
         for y in range(3):
@@ -134,64 +134,58 @@ class TicTacToe(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
     
-    async def setup_hook(self):
-        # Register perintah global
+    async def cog_load(self):
+        await self.bot.wait_until_ready()
         await self.bot.tree.sync()
-        print("Tic Tac Toe command synced globally!")
+        print("Tic Tac Toe commands synced!")
     
     @app_commands.command(
         name="tictactoe",
         description="Undang temanmu main Tic Tac Toe"
     )
-    @app_commands.describe(lawan="Pilih lawan mainmu")
-    @app_commands.default_permissions(use_application_commands=True)  # Izinkan semua member
-    async def tic_tac_toe(self, interaction: discord.Interaction, lawan: discord.Member):
-        """Memulai permainan Tic Tac Toe dengan konfirmasi reaction"""
-        
-        if lawan.bot:
+    @app_commands.describe(opponent="Pilih lawan mainmu")
+    @app_commands.default_permissions(use_application_commands=True)
+    async def tic_tac_toe(self, interaction: discord.Interaction, opponent: discord.Member):
+        """Mainkan Tic Tac Toe dengan temanmu"""
+        if opponent.bot:
             return await interaction.response.send_message("Bots tidak bisa main Tic Tac Toe!", ephemeral=True)
             
-        if lawan == interaction.user:
+        if opponent == interaction.user:
             return await interaction.response.send_message("Tidak bisa main sendiri!", ephemeral=True)
         
-        # Kirim pesan undangan dengan button
         embed = discord.Embed(
             title="🎮 Undangan Tic Tac Toe",
             description=(
-                f"{lawan.mention}, kamu diundang main Tic Tac Toe oleh {interaction.user.mention}!\n\n"
+                f"{opponent.mention}, kamu diundang main oleh {interaction.user.mention}!\n\n"
                 "Klik tombol dibawah untuk:\n"
                 "✅ Terima undangan\n"
                 "❌ Tolak undangan\n\n"
-                "Undangan akan kadaluarsa dalam 1 menit."
+                "Undangan kadaluarsa dalam 1 menit."
             ),
             color=discord.Color.blue()
         )
         
-        view = ConfirmView(interaction.user, lawan)
+        view = ConfirmView(interaction.user, opponent)
         await interaction.response.send_message(embed=embed, view=view)
         await view.wait()
         
         if view.is_finished():
             if view.confirmed:
-                # Mulai game
-                game_view = TicTacToeView(interaction.user, lawan)
-                
+                game_view = TicTacToeView(interaction.user, opponent)
                 embed = discord.Embed(
                     title="🎮 Tic Tac Toe",
                     description=(
                         f"**Pemain 1:** ❌ {interaction.user.mention}\n"
-                        f"**Pemain 2:** ⭕ {lawan.mention}\n\n"
+                        f"**Pemain 2:** ⭕ {opponent.mention}\n\n"
                         f"🔹 Giliran: {game_view.current_player.mention}\n\n"
                         f"{game_view.get_board_str()}"
                     ),
                     color=discord.Color.green()
                 )
-                
-                message = await interaction.original_response()
-                await message.edit(embed=embed, view=game_view)
+                await interaction.edit_original_response(embed=embed, view=game_view)
             else:
                 embed = discord.Embed(
-                    description=f"❌ {lawan.mention} menolak undangan main.",
+                    description=f"❌ {opponent.mention} menolak undangan main.",
                     color=discord.Color.red()
                 )
                 await interaction.edit_original_response(embed=embed, view=None)
@@ -203,7 +197,4 @@ class TicTacToe(commands.Cog):
             await interaction.edit_original_response(embed=embed, view=None)
 
 async def setup(bot):
-    cog = TicTacToe(bot)
-    await bot.add_cog(cog)
-    # Sync commands saat cog dimuat
-    await bot.tree.sync()
+    await bot.add_cog(TicTacToe(bot))

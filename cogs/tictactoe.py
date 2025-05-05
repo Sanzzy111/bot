@@ -163,12 +163,6 @@ class TicTacToe(commands.Cog):
         self.bot = bot
         self.active_games = {}
     
-    async def setup_hook(self):
-        # Register slash command
-        self.bot.tree.add_command(self.tic_tac_toe)
-        await self.bot.tree.sync()
-        print("Tic Tac Toe command registered!")
-    
     @app_commands.command(
         name="tictactoe",
         description="Mulai permainan Tic Tac Toe dengan teman"
@@ -203,8 +197,5 @@ class TicTacToe(commands.Cog):
         print(f"Tic Tac Toe cog ready! Logged in as {self.bot.user}")
 
 async def setup(bot):
-    cog = TicTacToe(bot)
-    await bot.add_cog(cog)
-    # Sync commands saat cog dimuat
-    await bot.tree.sync()
-    print("Tic Tac Toe commands synced!")
+    await bot.add_cog(TicTacToe(bot))
+    print("Tic Tac Toe cog loaded!")

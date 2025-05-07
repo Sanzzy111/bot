@@ -1,201 +1,191 @@
 import discord
 from discord.ext import commands
-from discord.ui import Button, View
-import random
 from discord import app_commands
-import asyncio
+import random, asyncio
+import aiosqlite
 
-class TicTacToeGame:
-    def __init__(self, player1, player2):
-        self.player1 = player1
-        self.player2 = player2
-        self.current_player = random.choice([player1, player2])
-        self.board = [[0, 0, 0], [0, 0, 0], [0, 0, 0]]
-    
-    def make_move(self, x, y):
-        if self.board[y][x] != 0:
-            return False
-        
-        self.board[y][x] = 1 if self.current_player == self.player1 else 2
-        self.current_player = self.player2 if self.current_player == self.player1 else self.player1
-        return True
-    
-    def check_winner(self):
-        # Check rows
-        for row in self.board:
-            if row[0] == row[1] == row[2] != 0:
-                return self.player1 if row[0] == 1 else self.player2
-        
-        # Check columns
-        for col in range(3):
-            if self.board[0][col] == self.board[1][col] == self.board[2][col] != 0:
-                return self.player1 if self.board[0][col] == 1 else self.player2
-        
-        # Check diagonals
-        if self.board[0][0] == self.board[1][1] == self.board[2][2] != 0:
-            return self.player1 if self.board[0][0] == 1 else self.player2
-        if self.board[0][2] == self.board[1][1] == self.board[2][0] != 0:
-            return self.player1 if self.board[0][2] == 1 else self.player2
-        
-        # Check draw
-        if all(cell != 0 for row in self.board for cell in row):
-            return "draw"
-        
-        return None
-    
-    def get_board_str(self):
-        symbols = ["⬜", "❌", "⭕"]
-        return "\n".join("".join(symbols[cell] for cell in row) for row in self.board)
 
-class TicTacToeButton(Button):
+class TicTacToeButton(discord.ui.Button):
     def __init__(self, x, y):
-        super().__init__(style=discord.ButtonStyle.secondary, label='\u200b', row=y)
+        super().__init__(label=" ", style=discord.ButtonStyle.secondary, row=y)
         self.x = x
         self.y = y
-    
+
     async def callback(self, interaction: discord.Interaction):
         view: TicTacToeView = self.view
-        
-        # Verify player
-        if interaction.user not in (view.game.player1, view.game.player2):
-            await interaction.response.send_message("Kamu bukan peserta game ini!", ephemeral=True)
-            return
-        
-        if interaction.user != view.game.current_player:
-            await interaction.response.send_message("Tunggu giliranmu ya!", ephemeral=True)
-            return
-        
-        # Process move
-        if view.game.make_move(self.x, self.y):
-            self.label = "❌" if interaction.user == view.game.player1 else "⭕"
-            self.style = discord.ButtonStyle.red if interaction.user == view.game.player1 else discord.ButtonStyle.blurple
-            self.disabled = True
-            
-            # Check game status
-            winner = view.game.check_winner()
-            if winner:
-                for child in view.children:
-                    child.disabled = True
-                view.stop()
-                
-                if winner == "draw":
-                    embed = discord.Embed(
-                        title="🎮 Tic Tac Toe - SERI!",
-                        description=f"Permainan berakhir seri!\n\n{view.game.get_board_str()}",
-                        color=discord.Color.orange()
-                    )
-                else:
-                    embed = discord.Embed(
-                        title="🎮 Tic Tac Toe - MENANG!",
-                        description=f"🎉 {winner.mention} menang!\n\n{view.game.get_board_str()}",
-                        color=discord.Color.green()
-                    )
-                
-                await interaction.response.edit_message(embed=embed, view=view)
-            else:
-                embed = discord.Embed(
-                    title="🎮 Tic Tac Toe",
-                    description=(
-                        f"**Pemain 1:** ❌ {view.game.player1.mention}\n"
-                        f"**Pemain 2:** ⭕ {view.game.player2.mention}\n\n"
-                        f"🔹 Giliran: {view.game.current_player.mention}\n\n"
-                        f"{view.game.get_board_str()}"
-                    ),
-                    color=discord.Color.blue()
-                )
-                await interaction.response.edit_message(embed=embed, view=view)
-        else:
-            await interaction.response.send_message("Kotak ini sudah terisi!", ephemeral=True)
 
-class TicTacToeView(View):
-    def __init__(self, game):
-        super().__init__(timeout=300)
-        self.game = game
-        
+        if interaction.user != view.current_player:
+            return await interaction.response.send_message("Bukan giliran kamu!", ephemeral=True)
+
+        if view.board[self.y][self.x] != 0:
+            return await interaction.response.send_message("Kotak ini sudah diisi!", ephemeral=True)
+
+        mark = view.player_marks[view.current_player]
+        self.label = mark
+        self.style = discord.ButtonStyle.success if mark == "❌" else discord.ButtonStyle.danger
+        self.disabled = True
+        view.board[self.y][self.x] = mark
+        view.last_move = interaction.user
+        await interaction.response.edit_message(view=view)
+
+        if view.check_winner(mark):
+            for child in view.children:
+                child.disabled = True
+            await view.cog.record_win(view.current_player.id)
+            loser = view.players[0] if view.current_player == view.players[1] else view.players[1]
+            await view.cog.record_loss(loser.id)
+            return await interaction.followup.send(f"**{mark} ({view.current_player.mention}) menang!**", ephemeral=False)
+
+        if view.is_full():
+            for child in view.children:
+                child.disabled = True
+            return await interaction.followup.send("**Seri!**", ephemeral=False)
+
+        view.switch_turn()
+        await interaction.followup.send(f"Giliran {view.current_player.mention} ({view.player_marks[view.current_player]})", ephemeral=False)
+
+
+class TicTacToeView(discord.ui.View):
+    def __init__(self, player1, player2, cog):
+        super().__init__(timeout=None)
+        self.board = [[0 for _ in range(3)] for _ in range(3)]
+        self.players = [player1, player2]
+        random.shuffle(self.players)
+        self.current_player = self.players[0]
+        self.player_marks = {
+            self.players[0]: "❌",
+            self.players[1]: "⭕"
+        }
+        self.last_move = self.current_player
+        self.message = None
+        self.cog = cog
+
         for y in range(3):
             for x in range(3):
                 self.add_item(TicTacToeButton(x, y))
 
-class ConfirmView(View):
-    def __init__(self, inviter, opponent):
-        super().__init__(timeout=60)
-        self.inviter = inviter
-        self.opponent = opponent
-    
-    @discord.ui.button(label="Terima", style=discord.ButtonStyle.green, emoji="✅")
-    async def accept(self, interaction: discord.Interaction, button: Button):
-        if interaction.user != self.opponent:
-            await interaction.response.send_message("Hanya yang diundang yang bisa menerima!", ephemeral=True)
-            return
-        
-        game = TicTacToeGame(self.inviter, self.opponent)
-        view = TicTacToeView(game)
-        
-        embed = discord.Embed(
-            title="🎮 Tic Tac Toe",
-            description=(
-                f"**Pemain 1:** ❌ {game.player1.mention}\n"
-                f"**Pemain 2:** ⭕ {game.player2.mention}\n\n"
-                f"🔹 Giliran: {game.current_player.mention}\n\n"
-                f"{game.get_board_str()}"
-            ),
-            color=discord.Color.green()
-        )
-        
-        await interaction.response.edit_message(embed=embed, view=view)
-        self.stop()
-    
-    @discord.ui.button(label="Tolak", style=discord.ButtonStyle.red, emoji="❌")
-    async def reject(self, interaction: discord.Interaction, button: Button):
-        if interaction.user != self.opponent:
-            await interaction.response.send_message("Hanya yang diundang yang bisa menolak!", ephemeral=True)
-            return
-        
-        embed = discord.Embed(
-            description=f"❌ {self.opponent.mention} menolak undangan main.",
-            color=discord.Color.red()
-        )
-        await interaction.response.edit_message(embed=embed, view=None)
-        self.stop()
+    def switch_turn(self):
+        self.current_player = self.players[0] if self.current_player == self.players[1] else self.players[1]
 
-class TicTacToe(commands.Cog):
+    def check_winner(self, mark):
+        for row in self.board:
+            if all(cell == mark for cell in row):
+                return True
+        for col in zip(*self.board):
+            if all(cell == mark for cell in col):
+                return True
+        if all(self.board[i][i] == mark for i in range(3)) or all(self.board[i][2 - i] == mark for i in range(3)):
+            return True
+        return False
+
+    def is_full(self):
+        return all(cell != 0 for row in self.board for cell in row)
+
+
+class TicTacToeCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.active_games = {}
-    
-    @app_commands.command(
-        name="tictactoe",
-        description="Mulai permainan Tic Tac Toe dengan teman"
-    )
-    @app_commands.describe(opponent="Pilih lawan mainmu")
-    async def tic_tac_toe(self, interaction: discord.Interaction, opponent: discord.Member):
-        """Memulai permainan Tic Tac Toe dengan konfirmasi"""
-        if opponent.bot:
-            return await interaction.response.send_message("Bots tidak bisa main Tic Tac Toe!", ephemeral=True)
-        
-        if opponent == interaction.user:
-            return await interaction.response.send_message("Tidak bisa main sendiri!", ephemeral=True)
-        
-        # Kirim pesan undangan
-        embed = discord.Embed(
-            title="🎮 Undangan Tic Tac Toe",
-            description=(
-                f"{opponent.mention}, kamu diundang main oleh {interaction.user.mention}!\n\n"
-                "Klik tombol dibawah untuk:\n"
-                "✅ Terima undangan\n"
-                "❌ Tolak undangan\n\n"
-                "Undangan kadaluarsa dalam 1 menit."
-            ),
-            color=discord.Color.blue()
-        )
-        
-        view = ConfirmView(interaction.user, opponent)
-        await interaction.response.send_message(embed=embed, view=view)
-    
-    @commands.Cog.listener()
-    async def on_ready(self):
-        print(f"Tic Tac Toe cog ready! Logged in as {self.bot.user}")
+        self.bot.loop.create_task(self.ensure_database())
 
-async def setup(bot):
-    await bot.add_cog(TicTacToe(bot))
-    print("Tic Tac Toe cog loaded!")
+    async def ensure_database(self):
+        async with aiosqlite.connect("leaderboard.db") as db:
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS leaderboard (
+                    user_id INTEGER PRIMARY KEY,
+                    wins INTEGER DEFAULT 0,
+                    losses INTEGER DEFAULT 0
+                )
+            """)
+            await db.commit()
+
+    async def record_win(self, user_id: int):
+        async with aiosqlite.connect("leaderboard.db") as db:
+            await db.execute("INSERT OR IGNORE INTO leaderboard (user_id, wins, losses) VALUES (?, 0, 0)", (user_id,))
+            await db.execute("UPDATE leaderboard SET wins = wins + 1 WHERE user_id = ?", (user_id,))
+            await db.commit()
+
+    async def record_loss(self, user_id: int):
+        async with aiosqlite.connect("leaderboard.db") as db:
+            await db.execute("INSERT OR IGNORE INTO leaderboard (user_id, wins, losses) VALUES (?, 0, 0)", (user_id,))
+            await db.execute("UPDATE leaderboard SET losses = losses + 1 WHERE user_id = ?", (user_id,))
+            await db.commit()
+
+    @app_commands.command(name="tictactoe", description="Tantang seseorang untuk bermain Tic Tac Toe!")
+    async def tictactoe(self, interaction: discord.Interaction, user: discord.Member):
+        if user == interaction.user:
+            return await interaction.response.send_message("Gak bisa main lawan diri sendiri!", ephemeral=True)
+
+        await interaction.response.send_message(
+            f"{user.mention}, {interaction.user.mention} ngajak kamu main **Tic Tac Toe**!\nKlik ✅ untuk terima atau ❌ untuk tolak.",
+            ephemeral=False
+        )
+        msg = await interaction.original_response()
+        await msg.add_reaction("✅")
+        await msg.add_reaction("❌")
+
+        def check(reaction, reactor):
+            return (
+                reactor.id == user.id
+                and str(reaction.emoji) in ["✅", "❌"]
+                and reaction.message.id == msg.id
+            )
+
+        try:
+            reaction, reactor = await self.bot.wait_for("reaction_add", timeout=60.0, check=check)
+        except asyncio.TimeoutError:
+            return await interaction.followup.send("Waktu habis. Tantangan dibatalkan.")
+
+        if str(reaction.emoji) == "❌":
+            return await interaction.followup.send(f"{user.mention} menolak tantangan.")
+
+        view = TicTacToeView(interaction.user, user, self)
+        embed = discord.Embed(
+            title="Tic Tac Toe",
+            description=f"❌ vs ⭕\nGiliran pertama: {view.current_player.mention} ({view.player_marks[view.current_player]})\n\n⏳ **Waktu giliran: 2 menit**",
+            color=discord.Color.blurple()
+        )
+        sent_msg = await interaction.followup.send(embed=embed, view=view)
+        view.message = sent_msg
+
+        # Game timeout per giliran
+        while True:
+            last = view.last_move
+            try:
+                await asyncio.wait_for(self.bot.wait_for(
+                    "interaction",
+                    check=lambda i: isinstance(i.message.component, discord.ui.Button) and i.user == view.current_player,
+                ), timeout=120)
+                break  # tombol ditekan
+            except asyncio.TimeoutError:
+                # timeout
+                for child in view.children:
+                    child.disabled = True
+                loser = view.current_player
+                winner = view.players[0] if view.current_player == view.players[1] else view.players[1]
+                await self.record_win(winner.id)
+                await self.record_loss(loser.id)
+                await view.message.edit(view=view)
+                return await interaction.followup.send(
+                    f"Waktu habis! {loser.mention} tidak main. {winner.mention} menang otomatis.")
+
+    @app_commands.command(name="leaderboard", description="Lihat top 10 pemain Tic Tac Toe.")
+    async def leaderboard(self, interaction: discord.Interaction):
+        async with aiosqlite.connect("leaderboard.db") as db:
+            cursor = await db.execute("SELECT user_id, wins, losses FROM leaderboard ORDER BY wins DESC LIMIT 10")
+            rows = await cursor.fetchall()
+
+        if not rows:
+            return await interaction.response.send_message("Belum ada yang main Tic Tac Toe.", ephemeral=True)
+
+        embed = discord.Embed(title="Tic Tac Toe Leaderboard", color=discord.Color.gold())
+        for i, (user_id, wins, losses) in enumerate(rows, start=1):
+            user = interaction.guild.get_member(user_id) or f"<@{user_id}>"
+            embed.add_field(name=f"{i}. {user}", value=f"Menang: **{wins}**, Kalah: **{losses}**", inline=False)
+        await interaction.response.send_message(embed=embed)
+
+
+async def setup(bot: commands.Bot):
+    cog = TicTacToeCog(bot)
+    bot.tree.add_command(cog.tictactoe)
+    bot.tree.add_command(cog.leaderboard)
+    await bot.add_cog(cog)

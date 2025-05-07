@@ -1,78 +1,89 @@
 import discord
 from discord.ext import commands
+from discord import option
+from datetime import datetime, timedelta
 import asyncio
 
 class Moderation(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    async def ensure_muted_role(self, guild: discord.Guild):
-        muted_role = discord.utils.get(guild.roles, name="Muted")
-        if muted_role is None:
-            muted_role = await guild.create_role(name="Muted", reason="To mute members.")
-            for channel in guild.channels:
+    # ====== MUTE ======
+    @commands.slash_command(description="Mute a user for a specific time")
+    @option("user", discord.Member, description="User to mute")
+    @option("duration", str, description="Duration (e.g., 10s, 5m, 2h)")
+    async def mute(self, ctx, user: discord.Member, duration: str):
+        await ctx.defer()
+        muted_role = discord.utils.get(ctx.guild.roles, name="Muted")
+        if not muted_role:
+            muted_role = await ctx.guild.create_role(name="Muted")
+
+            for channel in ctx.guild.channels:
                 await channel.set_permissions(muted_role, send_messages=False, speak=False, add_reactions=False)
-        return muted_role
 
-    @discord.app_commands.command(name="kick", description="Kick a member from the server.")
-    @discord.app_commands.describe(member="Member to kick", reason="Reason for kicking")
-    async def kick(self, interaction: discord.Interaction, member: discord.Member, reason: str = None):
-        if not interaction.user.guild_permissions.kick_members:
-            await interaction.response.send_message("You don't have permission to kick members.", ephemeral=True)
-            return
-        await member.kick(reason=reason)
-        await interaction.response.send_message(f"Kicked {member.mention} for: {reason}")
+        if muted_role in user.roles:
+            return await ctx.respond("User is already muted.")
 
-    @discord.app_commands.command(name="ban", description="Ban a member from the server.")
-    @discord.app_commands.describe(member="Member to ban", reason="Reason for banning")
-    async def ban(self, interaction: discord.Interaction, member: discord.Member, reason: str = None):
-        if not interaction.user.guild_permissions.ban_members:
-            await interaction.response.send_message("You don't have permission to ban members.", ephemeral=True)
-            return
-        await member.ban(reason=reason)
-        await interaction.response.send_message(f"Banned {member.mention} for: {reason}")
+        await user.add_roles(muted_role)
+        await ctx.respond(f"{user.mention} has been muted for {duration}")
 
-    @discord.app_commands.command(name="clear", description="Clear a specific number of messages from the channel.")
-    @discord.app_commands.describe(amount="How many messages you want to delete (1-100)")
-    async def clear(self, interaction: discord.Interaction, amount: int):
-        if not interaction.user.guild_permissions.manage_messages:
-            await interaction.response.send_message("You don't have permission to manage messages.", ephemeral=True)
-            return
-        if amount < 1 or amount > 100:
-            await interaction.response.send_message("Please specify an amount between 1 and 100.", ephemeral=True)
-            return
-        await interaction.response.defer()
-        deleted = await interaction.channel.purge(limit=amount)
-        await interaction.followup.send(f"Cleared {len(deleted)} messages!", ephemeral=True)
+        time_multiplier = {"s": 1, "m": 60, "h": 3600}
+        unit = duration[-1]
+        if unit not in time_multiplier:
+            return await ctx.respond("Invalid time format! Use s, m, or h.")
+        try:
+            time_amount = int(duration[:-1])
+        except ValueError:
+            return await ctx.respond("Invalid number format in duration.")
+        
+        seconds = time_amount * time_multiplier[unit]
+        await asyncio.sleep(seconds)
 
-    @discord.app_commands.command(name="mute", description="Mute a member for a certain amount of time (in seconds).")
-    @discord.app_commands.describe(member="Member to mute", duration="Duration to mute in seconds", reason="Reason for muting")
-    async def mute(self, interaction: discord.Interaction, member: discord.Member, duration: int, reason: str = None):
-        if not interaction.user.guild_permissions.moderate_members:
-            await interaction.response.send_message("You don't have permission to mute members.", ephemeral=True)
-            return
-        muted_role = await self.ensure_muted_role(interaction.guild)
+        if muted_role in user.roles:
+            await user.remove_roles(muted_role)
+            try:
+                await user.send(f"You have been unmuted in {ctx.guild.name}.")
+            except:
+                pass
 
-        await member.add_roles(muted_role, reason=reason)
-        await interaction.response.send_message(f"Muted {member.mention} for {duration} seconds.", ephemeral=True)
-
-        await asyncio.sleep(duration)
-        if muted_role in member.roles:
-            await member.remove_roles(muted_role, reason="Mute duration expired")
-
-    @discord.app_commands.command(name="unmute", description="Unmute a muted member manually.")
-    @discord.app_commands.describe(member="Member to unmute")
-    async def unmute(self, interaction: discord.Interaction, member: discord.Member):
-        if not interaction.user.guild_permissions.moderate_members:
-            await interaction.response.send_message("You don't have permission to unmute members.", ephemeral=True)
-            return
-        muted_role = await self.ensure_muted_role(interaction.guild)
-
-        if muted_role in member.roles:
-            await member.remove_roles(muted_role, reason="Manual unmute")
-            await interaction.response.send_message(f"Unmuted {member.mention}.", ephemeral=True)
+    # ====== UNMUTE ======
+    @commands.slash_command(description="Unmute a user")
+    @option("user", discord.Member, description="User to unmute")
+    async def unmute(self, ctx, user: discord.Member):
+        muted_role = discord.utils.get(ctx.guild.roles, name="Muted")
+        if muted_role and muted_role in user.roles:
+            await user.remove_roles(muted_role)
+            await ctx.respond(f"{user.mention} has been unmuted.")
         else:
-            await interaction.response.send_message(f"{member.mention} is not muted.", ephemeral=True)
+            await ctx.respond("User is not muted.")
 
-async def setup(bot):
-    await bot.add_cog(Moderation(bot))
+    # ====== BAN ======
+    @commands.slash_command(description="Ban a user from the server")
+    @option("user", discord.Member, description="User to ban")
+    @option("reason", str, description="Reason for ban", required=False)
+    async def ban(self, ctx, user: discord.Member, reason: str = "No reason provided"):
+        await ctx.guild.ban(user, reason=reason)
+        await ctx.respond(f"{user} has been banned. Reason: {reason}")
+
+    # ====== UNBAN ======
+    @commands.slash_command(description="Unban a user from the server")
+    @option("user_id", str, description="User ID to unban")
+    async def unban(self, ctx, user_id: str):
+        user_id = int(user_id)
+        banned_users = await ctx.guild.bans()
+        for entry in banned_users:
+            if entry.user.id == user_id:
+                await ctx.guild.unban(entry.user)
+                return await ctx.respond(f"Unbanned {entry.user}")
+        await ctx.respond("User not found in ban list.")
+
+    # ====== KICK ======
+    @commands.slash_command(description="Kick a user from the server")
+    @option("user", discord.Member, description="User to kick")
+    @option("reason", str, description="Reason for kick", required=False)
+    async def kick(self, ctx, user: discord.Member, reason: str = "No reason provided"):
+        await ctx.guild.kick(user, reason=reason)
+        await ctx.respond(f"{user} has been kicked. Reason: {reason}")
+
+def setup(bot):
+    bot.add_cog(Moderation(bot))
